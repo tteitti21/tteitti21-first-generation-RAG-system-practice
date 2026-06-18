@@ -3,9 +3,14 @@ import numpy as np
 import os
 import re
 from colorama import Fore, Style, init
+from util.document_utils import (
+    format_document_for_context,
+    get_document_text,
+    is_valid_document_cache
+)
 from util.env_utils import get_env_path, load_env_file
 from util.file_utils import json_file_has_content, load_json, save_json
-from util.pdf_utils import load_pdf_text
+from util.pdf_utils import load_pdf_pages
 
 init(autoreset=True)  # Automatically resets style after every print
 client = OpenAI()
@@ -14,7 +19,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(BASE_DIR, ".env")
 CHUNK_SIZE = 1000
 TOP_K = 3
-MIN_SIMILARITY = 0.39
+MIN_SIMILARITY = 0.35
 MAX_HISTORY = 100
 RECENT_CHAT_TURNS = 3
 
@@ -134,25 +139,46 @@ def chunk_text(units: list[str], max_chars: int):
 
     return chunks
 
+
+def create_page_chunks(pdf_pages):
+    documents = []
+
+    for page in pdf_pages:
+        page_chunks = chunk_text(
+            split_text_units(page["text"]),
+            CHUNK_SIZE,
+        )
+
+        for chunk in page_chunks:
+            documents.append(
+                {
+                    "page": page["page"],
+                    "text": chunk
+                }
+            )
+
+    return documents
+
+
 # Loads existing chunks or recreates them if they are too large 
 def load_or_create_documents():
     if json_file_has_content(CHUNKS_PATH):
         print(f"Found stored chunks in {CHUNKS_PATH}...")
         documents = load_json(CHUNKS_PATH)
 
-        if all(len(doc) <= CHUNK_SIZE for doc in documents):
+        if is_valid_document_cache(documents, CHUNK_SIZE):
             return documents, False
 
-        print(f"{Fore.RED}Stored chunks are too large. Recreating chunks and embeddings...")
+        print(
+            f"{Fore.RED}Stored chunks are old or too large. "
+            "Recreating chunks and embeddings..."
+        )
 
     print("Loading PDF...")
-    pdf_text = load_pdf_text(PDF_PATH)
+    pdf_pages = load_pdf_pages(PDF_PATH)
 
     print("Creating chunks...")
-    documents = chunk_text(
-        split_text_units(pdf_text),
-        CHUNK_SIZE,
-    )
+    documents = create_page_chunks(pdf_pages)
 
     print(f"Storing chunks in {CHUNKS_PATH}...")
     save_json(CHUNKS_PATH, documents)
@@ -171,7 +197,7 @@ def load_or_create_embeddings(documents, force_recreate=False):
         print(f"{Fore.RED}Stored embeddings do not match stored chunks. Recreating embeddings...")
 
     print("Creating embeddings...")
-    doc_embeddings = [get_embedding(doc) for doc in documents]
+    doc_embeddings = [get_embedding(get_document_text(doc)) for doc in documents]
 
     print(f"Storing embeddings in {EMBEDDINGS_PATH}...")
     save_json(EMBEDDINGS_PATH, doc_embeddings)
@@ -191,7 +217,8 @@ def store_relevant_chunks(question, retrieval_query, documents, top_indices, sco
             {
                 "chunk_index": int(idx),
                 "score": float(scores[idx]),
-                "chunk": documents[idx]
+                "page": documents[idx]["page"],
+                "chunk": get_document_text(documents[idx])
             }
             for idx in top_indices
         ]
@@ -290,9 +317,13 @@ def main():
         for rank, idx in enumerate(top_indices, start=1):
             print(f"\n--- Rank {rank} ---")
             print(f"Score: {scores[idx]:.4f}")
-            print(documents[idx][:500])
+            print(f"Page: {documents[idx]['page']}")
+            print(get_document_text(documents[idx])[:500])
 
-        context = "\n\n".join(relevant_chunks)
+        context = "\n\n".join(
+            format_document_for_context(chunk)
+            for chunk in relevant_chunks
+        )
 
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
