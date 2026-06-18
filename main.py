@@ -4,7 +4,9 @@ import numpy as np
 import json
 import os
 import re
+from colorama import Fore, Style, init
 
+init(autoreset=True)  # Automatically resets style after every print
 client = OpenAI()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -233,6 +235,8 @@ def store_relevant_chunks(question, documents, top_indices, scores):
 
 
 def main():
+    print(f"{Fore.CYAN}" + "_" * 50)
+    
     documents, chunks_recreated = load_or_create_documents()
     print(f"Loaded {len(documents)} chunks")
 
@@ -243,16 +247,12 @@ def main():
         )
     )
 
-    print("Embeddings ready")
+    print(f"{Fore.GREEN}Embeddings ready")
 
     while True:
 
-        question = input("\nQuestion: ")
-
-        if question.lower() in [
-            "exit",
-            "quit"
-        ]:
+        question = input(f"{Fore.LIGHTYELLOW_EX}\nQuestion: ")
+        if question.lower() in [ "exit","quit"]:
             break
 
         question_embedding = np.array(
@@ -279,11 +279,12 @@ def main():
             scores
         )
 
-        print("\nRetrieved chunks:\n")
+        print(f"{Fore.LIGHTMAGENTA_EX}\nRetrieved chunks:")
         # Inspect retrieved chunks
-        for i, chunk in enumerate(relevant_chunks):
-            print(f"\n--- Chunk {i+1} ---")
-            print(chunk[:500])
+        for rank, idx in enumerate(top_indices, start=1):
+            print(f"\n--- Rank {rank} ---")
+            print(f"Score: {scores[idx]:.4f}")
+            print(documents[idx][:500])
 
         context = "\n\n".join(relevant_chunks)
 
@@ -309,9 +310,9 @@ def main():
             ]
         )
 
-        print("\nAnswer:\n")
-
-        print(response.choices[0].message.content)
+        print(f"{Fore.GREEN}\nAnswer:\n")
+        print("AI", response.choices[0].message.content)
+        print(f"{Fore.CYAN}" + "_" * 50)
 
 
 if __name__ == "__main__":

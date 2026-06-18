@@ -1,1 +1,1 @@
-pip install openai numpy pypdf
+pip install openai numpy pypdf, colorama
