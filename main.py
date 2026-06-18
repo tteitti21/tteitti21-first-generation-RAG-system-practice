@@ -15,6 +15,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(BASE_DIR, ".env")
 CHUNK_SIZE = 1000
 TOP_K = 3
+MAX_HISTORY = 100
 
 
 ENV_VALUES = load_env_file(ENV_PATH)
@@ -199,6 +200,7 @@ def store_relevant_chunks(question, documents, top_indices, scores):
         history = load_json(RELEVANT_CHUNKS_PATH)
 
     history.append(retrieval)
+    history = history[-MAX_HISTORY:]
     save_json(RELEVANT_CHUNKS_PATH, history)
 
     return relevant_chunks
