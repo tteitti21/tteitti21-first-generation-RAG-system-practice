@@ -5,7 +5,6 @@ import re
 from colorama import Fore, Style, init
 from util.env_utils import get_env_path, load_env_file
 from util.file_utils import json_file_has_content, load_json, save_json
-from util.math_utils import cosine_similarity
 from util.pdf_utils import load_pdf_text
 
 init(autoreset=True)  # Automatically resets style after every print
@@ -220,12 +219,12 @@ def build_retrieval_query(question, chat_history):
     )
 
     return f"""
-Recent conversation:
-{history_text}
+        Recent conversation:
+        {history_text}
 
-Current question:
-{question}
-""".strip()
+        Current question:
+        {question}
+        """.strip()
 
 
 # -------------------- Main program ----------------
@@ -241,6 +240,7 @@ def main():
             force_recreate=chunks_recreated
         )
     )
+    doc_embedding_norms = np.linalg.norm(doc_embeddings, axis=1)
 
     print(f"{Fore.GREEN}Embeddings ready")
 
@@ -258,13 +258,9 @@ def main():
             get_embedding(retrieval_query)
         )
 
-        scores = [
-            cosine_similarity(
-                question_embedding,
-                doc_embedding
-            )
-            for doc_embedding in doc_embeddings
-        ]
+        scores = np.dot(doc_embeddings, question_embedding) / (
+            doc_embedding_norms * np.linalg.norm(question_embedding)
+        )
 
         top_indices = (np.argsort(scores)[-TOP_K:][::-1])
 
@@ -289,20 +285,15 @@ def main():
             model="gpt-4.1-mini",
             messages=[
                 {
-                    "role": "system",
-                    "content": """
-                            You must answer only using
-                            the provided context.
+                "role": "system",
+                "content": """
+                    Answer using only the provided context.
+                    You may make reasonable inferences from the context.
+                    Do not introduce information that is not supported by the context.
 
-                            If the answer is not present
-                            in the context, respond:
-
-                            'I cannot find that information
-                            in the provided documents.'
-
-                            Do not use outside knowledge.
-                            Do not make assumptions.
-                            """
+                    If the answer cannot be determined from the context, say:
+                    'I cannot find that information in the provided documents.'
+                """
                 },
                 {
                     "role": "user",
