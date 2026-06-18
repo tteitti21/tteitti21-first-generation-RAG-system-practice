@@ -16,6 +16,7 @@ ENV_PATH = os.path.join(BASE_DIR, ".env")
 CHUNK_SIZE = 1000
 TOP_K = 3
 MAX_HISTORY = 100
+RECENT_CHAT_TURNS = 3
 
 
 ENV_VALUES = load_env_file(ENV_PATH)
@@ -179,11 +180,12 @@ def load_or_create_embeddings(documents, force_recreate=False):
 
 # Store current chunks, add them to history and return history
 # for more performant future reference.
-def store_relevant_chunks(question, documents, top_indices, scores):
+def store_relevant_chunks(question, retrieval_query, documents, top_indices, scores):
     relevant_chunks = [documents[i] for i in top_indices]
 
     retrieval = {
         "question": question,
+        "retrieval_query": retrieval_query,
         "chunks": relevant_chunks,
         "matches": [
             {
@@ -205,6 +207,27 @@ def store_relevant_chunks(question, documents, top_indices, scores):
 
     return relevant_chunks
 
+
+def build_retrieval_query(question, chat_history):
+    recent_history = chat_history[-RECENT_CHAT_TURNS:]
+
+    if not recent_history:
+        return question
+
+    history_text = "\n".join(
+        f"User: {turn['question']}\nAssistant: {turn['answer']}"
+        for turn in recent_history
+    )
+
+    return f"""
+Recent conversation:
+{history_text}
+
+Current question:
+{question}
+""".strip()
+
+
 # -------------------- Main program ----------------
 def main():
     print(f"{Fore.CYAN}" + "_" * 50)
@@ -221,14 +244,18 @@ def main():
 
     print(f"{Fore.GREEN}Embeddings ready")
 
+    chat_history = []
+
     while True:
 
         question = input(f"{Fore.LIGHTYELLOW_EX}\nQuestion: {Style.RESET_ALL}")
         if question.lower() in [ "exit","quit"]:
             break
 
+        retrieval_query = build_retrieval_query(question, chat_history)
+
         question_embedding = np.array(
-            get_embedding(question)
+            get_embedding(retrieval_query)
         )
 
         scores = [
@@ -243,6 +270,7 @@ def main():
 
         relevant_chunks = store_relevant_chunks(
             question,
+            retrieval_query,
             documents,
             top_indices,
             scores
@@ -289,8 +317,18 @@ def main():
             ]
         )
 
+        answer = response.choices[0].message.content
+
+        chat_history.append(
+            {
+                "question": question,
+                "answer": answer
+            }
+        )
+        chat_history = chat_history[-RECENT_CHAT_TURNS:]
+
         print(f"{Fore.GREEN}\nAnswer:\n")
-        print(response.choices[0].message.content)
+        print(answer)
         print(f"{Fore.CYAN}" + "_" * 50)
 
 
