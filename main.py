@@ -1,10 +1,12 @@
 from openai import OpenAI
-from pypdf import PdfReader
 import numpy as np
-import json
 import os
 import re
 from colorama import Fore, Style, init
+from util.env_utils import get_env_path, load_env_file
+from util.file_utils import json_file_has_content, load_json, save_json
+from util.math_utils import cosine_similarity
+from util.pdf_utils import load_pdf_text
 
 init(autoreset=True)  # Automatically resets style after every print
 client = OpenAI()
@@ -15,52 +17,12 @@ CHUNK_SIZE = 1000
 TOP_K = 3
 
 
-def load_env_file(file_path):
-    env_values = {}
-
-    if not os.path.exists(file_path):
-        return env_values
-
-    with open(file_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-
-            key, value = line.split("=", 1)
-            env_values[key.strip()] = value.strip().strip("\"'")
-
-    return env_values
-
-
-def get_env_path(env_values, key):
-    value = os.environ.get(key) or env_values.get(key)
-
-    if not value:
-        raise ValueError(f"Missing required path in .env: {key}")
-
-    if os.path.isabs(value):
-        return value
-
-    return os.path.join(BASE_DIR, value)
-
-
 ENV_VALUES = load_env_file(ENV_PATH)
 
-PDF_PATH = get_env_path(ENV_VALUES, "PDF_PATH")
-CHUNKS_PATH = get_env_path(ENV_VALUES, "CHUNKS_PATH")
-EMBEDDINGS_PATH = get_env_path(ENV_VALUES, "EMBEDDINGS_PATH")
-RELEVANT_CHUNKS_PATH = get_env_path(ENV_VALUES, "RELEVANT_CHUNKS_PATH")
-
-
-def cosine_similarity(a, b):
-    a = np.array(a)
-    b = np.array(b)
-
-    return np.dot(a, b) / (
-        np.linalg.norm(a) * np.linalg.norm(b)
-    )
+PDF_PATH = get_env_path(ENV_VALUES, "PDF_PATH", BASE_DIR)
+CHUNKS_PATH = get_env_path(ENV_VALUES, "CHUNKS_PATH", BASE_DIR)
+EMBEDDINGS_PATH = get_env_path(ENV_VALUES, "EMBEDDINGS_PATH", BASE_DIR)
+RELEVANT_CHUNKS_PATH = get_env_path(ENV_VALUES, "RELEVANT_CHUNKS_PATH", BASE_DIR)
 
 
 def get_embedding(text):
@@ -70,39 +32,6 @@ def get_embedding(text):
     )
 
     return response.data[0].embedding
-
-# IS FINE
-def load_pdf_text(pdf_path):
-    reader = PdfReader(pdf_path)
-
-    full_text = ""
-
-    for page in reader.pages:
-        page_text = page.extract_text()
-
-        if page_text:
-            full_text += page_text + "\n"
-
-    return full_text
-
-
-def json_file_has_content(file_path):
-    return os.path.exists(file_path) and os.path.getsize(file_path) > 0
-
-
-def load_json(file_path):
-    with open(file_path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_json(file_path, data):
-    parent_dir = os.path.dirname(file_path)
-
-    if parent_dir:
-        os.makedirs(parent_dir, exist_ok=True)
-
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 def split_text_units(text):
