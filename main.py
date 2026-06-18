@@ -14,6 +14,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(BASE_DIR, ".env")
 CHUNK_SIZE = 1000
 TOP_K = 3
+MIN_SIMILARITY = 0.39
 MAX_HISTORY = 100
 RECENT_CHAT_TURNS = 3
 
@@ -262,7 +263,19 @@ def main():
             doc_embedding_norms * np.linalg.norm(question_embedding)
         )
 
-        top_indices = (np.argsort(scores)[-TOP_K:][::-1])
+        accepted_indices = np.where(scores >= MIN_SIMILARITY)[0]
+
+        if len(accepted_indices) == 0:
+            print(
+                f"{Fore.YELLOW}\nNo chunks were similar enough. "
+                "Could you elaborate or ask more specifically?"
+            )
+            print(f"{Fore.CYAN}" + "_" * 50)
+            continue
+
+        top_indices = accepted_indices[
+            np.argsort(scores[accepted_indices])[-TOP_K:][::-1]
+        ]
 
         relevant_chunks = store_relevant_chunks(
             question,
