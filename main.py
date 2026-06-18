@@ -278,7 +278,7 @@ def main():
         )
 
         print(f"{Fore.GREEN}\nAnswer:\n")
-        print("AI", response.choices[0].message.content)
+        print(response.choices[0].message.content)
         print(f"{Fore.CYAN}" + "_" * 50)
 
 
