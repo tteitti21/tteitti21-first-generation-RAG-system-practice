@@ -122,7 +122,7 @@ def split_text_units(text):
     ]
 
 
-def split_oversized_unit(text, max_chars):
+def split_oversized_unit(text: str, max_chars: int):
     sentences = [
         sentence.strip()
         for sentence in re.split(r"(?<=[.!?])\s+", text)
@@ -139,11 +139,13 @@ def split_oversized_unit(text, max_chars):
     return chunk_text(sentences, max_chars)
 
 
-def chunk_text(units, max_chars):
+def chunk_text(units: list[str], max_chars: int):
     chunks = []
     current_chunk = ""
 
     for unit in units:
+        # A single unit can be larger than the chunk limit, so split it before
+        # continuing with normal chunk packing.
         if len(unit) > max_chars:
             if current_chunk:
                 chunks.append(current_chunk)
@@ -152,14 +154,17 @@ def chunk_text(units, max_chars):
             chunks.extend(split_oversized_unit(unit, max_chars))
             continue
 
+        # Try adding the next complete unit to the current chunk.
         candidate = f"{current_chunk}\n\n{unit}" if current_chunk else unit
 
         if len(candidate) <= max_chars:
             current_chunk = candidate
         else:
+            # If it no longer fits, store the finished chunk and start a new one.
             chunks.append(current_chunk)
             current_chunk = unit
 
+    # Store the final in-progress chunk after all units have been handled.
     if current_chunk:
         chunks.append(current_chunk)
 
@@ -254,7 +259,7 @@ def main():
 
     while True:
 
-        question = input(f"{Fore.LIGHTYELLOW_EX}\nQuestion: ")
+        question = input(f"{Fore.LIGHTYELLOW_EX}\nQuestion: {Style.RESET_ALL}")
         if question.lower() in [ "exit","quit"]:
             break
 
@@ -271,9 +276,6 @@ def main():
         ]
 
         top_indices = (np.argsort(scores)[-TOP_K:][::-1])
-        # Diagnose incase of poor retrieval
-        for idx in top_indices:
-            print(f"Score: {scores[idx]:.4f}")
 
         relevant_chunks = store_relevant_chunks(
             question,
