@@ -260,9 +260,19 @@ def main():
             messages=[
                 {
                     "role": "system",
-                    "content": """ You must answer only using the provided context.
+                    "content": """
+                            You must answer only using
+                            the provided context.
 
-                    If the answer cannot be found in the context, say so."""
+                            If the answer is not present
+                            in the context, respond:
+
+                            'I cannot find that information
+                            in the provided documents.'
+
+                            Do not use outside knowledge.
+                            Do not make assumptions.
+                            """
                 },
                 {
                     "role": "user",
