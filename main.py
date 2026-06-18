@@ -165,6 +165,7 @@ def chunk_text(units, max_chars):
 
     return chunks
 
+# Loads existing chunks or recreates them if they are too large 
 def load_or_create_documents():
     if json_file_has_content(CHUNKS_PATH):
         print(f"Found stored chunks in {CHUNKS_PATH}...")
@@ -173,7 +174,7 @@ def load_or_create_documents():
         if all(len(doc) <= CHUNK_SIZE for doc in documents):
             return documents, False
 
-        print("Stored chunks are too large. Recreating chunks and embeddings...")
+        print(f"{Fore.RED}Stored chunks are too large. Recreating chunks and embeddings...")
 
     print("Loading PDF...")
     pdf_text = load_pdf_text(PDF_PATH)
@@ -189,6 +190,7 @@ def load_or_create_documents():
 
     return documents, True
 
+# Loads existing embeddings if new chunks were created, or if their count doesn't match
 def load_or_create_embeddings(documents, force_recreate=False):
     if json_file_has_content(EMBEDDINGS_PATH) and not force_recreate:
         print(f"Found stored embeddings in {EMBEDDINGS_PATH}...")
@@ -197,7 +199,7 @@ def load_or_create_embeddings(documents, force_recreate=False):
         if len(doc_embeddings) == len(documents):
             return doc_embeddings
 
-        print("Stored embeddings do not match stored chunks. Recreating embeddings...")
+        print(f"{Fore.RED}Stored embeddings do not match stored chunks. Recreating embeddings...")
 
     print("Creating embeddings...")
     doc_embeddings = [get_embedding(doc) for doc in documents]
@@ -207,7 +209,8 @@ def load_or_create_embeddings(documents, force_recreate=False):
 
     return doc_embeddings
 
-
+# Store current chunks, add them to history and return history
+# for more performant future reference.
 def store_relevant_chunks(question, documents, top_indices, scores):
     relevant_chunks = [documents[i] for i in top_indices]
 
@@ -233,10 +236,10 @@ def store_relevant_chunks(question, documents, top_indices, scores):
 
     return relevant_chunks
 
-
+# -------------------- Main program ----------------
 def main():
     print(f"{Fore.CYAN}" + "_" * 50)
-    
+
     documents, chunks_recreated = load_or_create_documents()
     print(f"Loaded {len(documents)} chunks")
 
