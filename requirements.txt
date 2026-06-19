@@ -1,1 +1,5 @@
-pip install openai numpy pypdf, colorama
+openai
+numpy
+pypdf
+colorama
+faiss-cpu

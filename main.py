@@ -1,4 +1,5 @@
 from openai import OpenAI
+import faiss
 import numpy as np
 import os
 import re
@@ -31,6 +32,19 @@ CHUNKS_PATH = get_env_path(ENV_VALUES, "CHUNKS_PATH", BASE_DIR)
 EMBEDDINGS_PATH = get_env_path(ENV_VALUES, "EMBEDDINGS_PATH", BASE_DIR)
 RELEVANT_CHUNKS_PATH = get_env_path(ENV_VALUES, "RELEVANT_CHUNKS_PATH", BASE_DIR)
 
+def build_faiss_index(doc_embeddings):
+    #Convert embeddings into FAISS-friendly NumPy format.
+    embeddings = np.asarray(doc_embeddings, dtype="float32")
+    faiss.normalize_L2(embeddings)
+
+    # For document embeddings, the array is usually shaped like this:
+    # (number_of_chunks, embedding_size) ->FAISS needs to know the latter.
+    dimension = embeddings.shape[1]
+    #Create a FAISS index with the correct embedding size.
+    index = faiss.IndexFlatIP(dimension)
+    index.add(embeddings)
+
+    return index
 
 def get_embedding(text):
     response = client.embeddings.create(
@@ -206,7 +220,7 @@ def load_or_create_embeddings(documents, force_recreate=False):
 
 # Store current chunks, add them to history and return history
 # for more performant future reference.
-def store_relevant_chunks(question, retrieval_query, documents, top_indices, scores):
+def store_relevant_chunks(question, retrieval_query, documents, top_indices, top_scores):
     relevant_chunks = [documents[i] for i in top_indices]
 
     retrieval = {
@@ -216,11 +230,11 @@ def store_relevant_chunks(question, retrieval_query, documents, top_indices, sco
         "matches": [
             {
                 "chunk_index": int(idx),
-                "score": float(scores[idx]),
+                "score": float(score),
                 "page": documents[idx]["page"],
                 "chunk": get_document_text(documents[idx])
             }
-            for idx in top_indices
+            for idx, score in zip(top_indices, top_scores)
         ]
     }
 
@@ -266,9 +280,13 @@ def main():
         load_or_create_embeddings(
             documents,
             force_recreate=chunks_recreated
-        )
+        ),
+        dtype="float32"
     )
-    doc_embedding_norms = np.linalg.norm(doc_embeddings, axis=1)
+
+    faiss_index = build_faiss_index(doc_embeddings)
+    # Ask for TOP_K results, unless there are fewer documents than TOP_K
+    search_limit = min(TOP_K, len(documents))
 
     print(f"{Fore.GREEN}Embeddings ready")
 
@@ -283,16 +301,23 @@ def main():
         retrieval_query = build_retrieval_query(question, chat_history)
 
         question_embedding = np.array(
-            get_embedding(retrieval_query)
+            [get_embedding(retrieval_query)],
+            dtype="float32"
         )
 
-        scores = np.dot(doc_embeddings, question_embedding) / (
-            doc_embedding_norms * np.linalg.norm(question_embedding)
+        faiss.normalize_L2(question_embedding)
+
+        result_scores, result_indices = faiss_index.search(
+            question_embedding,
+            search_limit
         )
 
-        accepted_indices = np.where(scores >= MIN_SIMILARITY)[0]
+        result_scores = result_scores[0]
+        result_indices = result_indices[0]
 
-        if len(accepted_indices) == 0:
+        accepted_positions = np.where(result_scores >= MIN_SIMILARITY)[0]
+
+        if len(accepted_positions) == 0:
             print(
                 f"{Fore.YELLOW}\nNo chunks were similar enough. "
                 "Could you elaborate or ask more specifically?"
@@ -300,23 +325,22 @@ def main():
             print(f"{Fore.CYAN}" + "_" * 50)
             continue
 
-        top_indices = accepted_indices[
-            np.argsort(scores[accepted_indices])[-TOP_K:][::-1]
-        ]
+        top_indices = result_indices[accepted_positions]
+        top_scores = result_scores[accepted_positions]
 
         relevant_chunks = store_relevant_chunks(
             question,
             retrieval_query,
             documents,
             top_indices,
-            scores
+            top_scores
         )
 
         print(f"{Fore.LIGHTMAGENTA_EX}\nRetrieved chunks:")
         # Inspect retrieved chunks
-        for rank, idx in enumerate(top_indices, start=1):
+        for rank, (idx, score) in enumerate(zip(top_indices, top_scores), start=1):
             print(f"\n--- Rank {rank} ---")
-            print(f"Score: {scores[idx]:.4f}")
+            print(f"Score: {score:.4f}")
             print(f"Page: {documents[idx]['page']}")
             print(get_document_text(documents[idx])[:500])
 
