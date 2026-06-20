@@ -1,16 +1,17 @@
 from openai import OpenAI
-import faiss
 import numpy as np
 import os
-import re
 from colorama import Fore, Style, init
+from util.chunk_utils import create_page_chunks
 from util.document_utils import (
     format_document_for_context,
     get_document_text,
     is_valid_document_cache
 )
 from util.env_utils import get_env_path, load_env_file
+from util.faiss_utils import load_or_create_faiss_index, normalize_query_embedding
 from util.file_utils import json_file_has_content, load_json, save_json
+from util.output_utils import print_search_results
 from util.pdf_utils import load_pdf_pages
 
 init(autoreset=True)  # Automatically resets style after every print
@@ -26,6 +27,10 @@ RECENT_CHAT_TURNS = 3
 
 
 ENV_VALUES = load_env_file(ENV_PATH)
+FAISS_INDEX_TYPE = os.environ.get("FAISS_INDEX_TYPE") or ENV_VALUES.get(
+    "FAISS_INDEX_TYPE",
+    "flat"
+)
 
 PDF_PATH = get_env_path(ENV_VALUES, "PDF_PATH", BASE_DIR)
 CHUNKS_PATH = get_env_path(ENV_VALUES, "CHUNKS_PATH", BASE_DIR)
@@ -33,19 +38,10 @@ EMBEDDINGS_PATH = get_env_path(ENV_VALUES, "EMBEDDINGS_PATH", BASE_DIR)
 RELEVANT_CHUNKS_PATH = get_env_path(ENV_VALUES, "RELEVANT_CHUNKS_PATH", BASE_DIR)
 FAISS_INDEX_PATH = get_env_path(ENV_VALUES, "FAISS_INDEX_PATH", BASE_DIR)
 
-def build_faiss_index(doc_embeddings):
-    # Convert embeddings into FAISS-friendly NumPy format.
-    embeddings = np.asarray(doc_embeddings, dtype="float32").copy()
-    faiss.normalize_L2(embeddings)
-
-    # For document embeddings, the array is usually shaped like this:
-    # (number_of_chunks, embedding_size). FAISS needs to know the latter.
-    dimension = embeddings.shape[1]
-    # Create a FAISS index with the correct embedding size.
-    index = faiss.IndexFlatIP(dimension)
-    index.add(embeddings)
-
-    return index
+FAISS_INDEX_PATH = FAISS_INDEX_PATH.replace(
+    ".index",
+    f"_{FAISS_INDEX_TYPE}.index"
+)
 
 def get_embedding(text):
     response = client.embeddings.create(
@@ -54,125 +50,6 @@ def get_embedding(text):
     )
 
     return response.data[0].embedding
-
-
-def split_text_units(text):
-    paragraphs = [
-        paragraph.strip()
-        for paragraph in re.split(r"\n\s*\n", text)
-        if paragraph.strip()
-    ]
-
-    if len(paragraphs) > 1:
-        return paragraphs
-
-    return [
-        line.strip()
-        for line in text.splitlines()
-        if line.strip()
-    ]
-
-
-def split_oversized_unit(text: str, max_chars: int):
-    # Prefer sentence boundaries when a paragraph-like unit is too large.
-    sentences = [
-        sentence.strip()
-        for sentence in re.split(r"(?<=[.!?])\s+", text)
-        if sentence.strip()
-    ]
-
-    # Some text, like a table of contents, may not contain sentence punctuation.
-    # In that case, split by words so chunks do not start with half a word.
-    if len(sentences) <= 1:
-        return split_text_on_words(text, max_chars)
-
-    return chunk_text(sentences, max_chars)
-
-
-def split_text_on_words(text: str, max_chars: int):
-    chunks = []
-    current_chunk = ""
-
-    for word in text.split():
-        # This should be rare, but protects against a single huge token.
-        if len(word) > max_chars:
-            if current_chunk:
-                chunks.append(current_chunk)
-                current_chunk = ""
-
-            chunks.extend(
-                word[start:start + max_chars]
-                for start in range(0, len(word), max_chars)
-            )
-            continue
-
-        # Try adding the next complete word to the current chunk.
-        candidate = f"{current_chunk} {word}" if current_chunk else word
-
-        if len(candidate) <= max_chars:
-            current_chunk = candidate
-        else:
-            # If the word does not fit, finish the current chunk and start a new one.
-            chunks.append(current_chunk)
-            current_chunk = word
-
-    # Store the final in-progress word chunk.
-    if current_chunk:
-        chunks.append(current_chunk)
-
-    return chunks
-
-
-def chunk_text(units: list[str], max_chars: int):
-    chunks = []
-    current_chunk = ""
-
-    for unit in units:
-        # A single unit can be larger than the chunk limit, so split it before
-        # continuing with normal chunk packing.
-        if len(unit) > max_chars:
-            if current_chunk:
-                chunks.append(current_chunk)
-                current_chunk = ""
-
-            chunks.extend(split_oversized_unit(unit, max_chars))
-            continue
-
-        # Try adding the next complete unit to the current chunk.
-        candidate = f"{current_chunk}\n\n{unit}" if current_chunk else unit
-
-        if len(candidate) <= max_chars:
-            current_chunk = candidate
-        else:
-            # If it no longer fits, store the finished chunk and start a new one.
-            chunks.append(current_chunk)
-            current_chunk = unit
-
-    # Store the final in-progress chunk after all units have been handled.
-    if current_chunk:
-        chunks.append(current_chunk)
-
-    return chunks
-
-
-def create_page_chunks(pdf_pages):
-    documents = []
-
-    for page in pdf_pages:
-        page_chunks = chunk_text(
-            split_text_units(page["text"]),
-            CHUNK_SIZE,
-        )
-
-        for chunk in page_chunks:
-            documents.append(
-                {
-                    "page": page["page"],
-                    "text": chunk
-                }
-            )
-
-    return documents
 
 
 # Loads existing chunks or recreates them if they are too large 
@@ -193,7 +70,7 @@ def load_or_create_documents():
     pdf_pages = load_pdf_pages(PDF_PATH)
 
     print("Creating chunks...")
-    documents = create_page_chunks(pdf_pages)
+    documents = create_page_chunks(pdf_pages, CHUNK_SIZE)
 
     print(f"Storing chunks in {CHUNKS_PATH}...")
     save_json(CHUNKS_PATH, documents)
@@ -218,48 +95,6 @@ def load_or_create_embeddings(documents, force_recreate=False):
     save_json(EMBEDDINGS_PATH, doc_embeddings)
 
     return doc_embeddings, True
-
-# Loads existing faiss index, or creates new if chunks were modified or doesnt match in length.
-def load_or_create_faiss_index(doc_embeddings, documents, force_recreate=False):
-    if os.path.exists(FAISS_INDEX_PATH) and not force_recreate:
-        print(f"Found stored FAISS index in {FAISS_INDEX_PATH}...")
-
-        index_is_newer_than_embeddings = (
-            not os.path.exists(EMBEDDINGS_PATH)
-            or os.path.getmtime(FAISS_INDEX_PATH) >= os.path.getmtime(EMBEDDINGS_PATH)
-        )
-
-        try:
-            index = faiss.read_index(FAISS_INDEX_PATH)
-        except RuntimeError:
-            index = None
-            print(f"{Fore.RED}Stored FAISS index could not be read. Recreating index...")
-
-        # Number of vectors inside FAISS index match number of document chunks
-        if (
-            index
-            and index.ntotal == len(documents)
-            and index_is_newer_than_embeddings
-        ):
-            return index
-
-        print(
-            f"{Fore.RED}Stored FAISS index is stale or does not match document count. "
-            "Recreating index..."
-        )
-
-    print("Creating FAISS index...")
-    index = build_faiss_index(doc_embeddings)
-
-    print(f"Storing FAISS index in {FAISS_INDEX_PATH}...")
-    parent_dir = os.path.dirname(FAISS_INDEX_PATH)
-
-    if parent_dir:
-        os.makedirs(parent_dir, exist_ok=True)
-
-    faiss.write_index(index, FAISS_INDEX_PATH)
-
-    return index
 
 # Store current chunks, add them to history and return history
 # for more performant future reference.
@@ -311,7 +146,6 @@ def build_retrieval_query(question, chat_history):
         {question}
         """.strip()
 
-
 # -------------------- Main program ----------------
 def main():
     print(f"{Fore.CYAN}" + "_" * 50)
@@ -330,7 +164,10 @@ def main():
 
     faiss_index = load_or_create_faiss_index(
         doc_embeddings,
-        documents,
+        len(documents),
+        FAISS_INDEX_PATH,
+        EMBEDDINGS_PATH,
+        index_type=FAISS_INDEX_TYPE,
         force_recreate=embeddings_recreated
     )
     # Ask for TOP_K results, unless there are fewer documents than TOP_K
@@ -353,7 +190,7 @@ def main():
             dtype="float32"
         )
 
-        faiss.normalize_L2(question_embedding)
+        question_embedding = normalize_query_embedding(question_embedding)
 
         result_scores, result_indices = faiss_index.search(
             question_embedding,
@@ -385,12 +222,7 @@ def main():
         )
 
         print(f"{Fore.LIGHTMAGENTA_EX}\nRetrieved chunks:")
-        # Inspect retrieved chunks
-        for rank, (idx, score) in enumerate(zip(top_indices, top_scores), start=1):
-            print(f"\n--- Rank {rank} ---")
-            print(f"Score: {score:.4f}")
-            print(f"Page: {documents[idx]['page']}")
-            print(get_document_text(documents[idx])[:500])
+        print_search_results(documents, top_indices, top_scores)
 
         context = "\n\n".join(
             format_document_for_context(chunk)
