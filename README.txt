@@ -12,5 +12,3 @@ The file paths are configured in the .env file.
 
 This project is meant for practice and experimentation, not as a production
 application.
-
-Create docs/ folder for the PDF and stored chunks/embeddings.

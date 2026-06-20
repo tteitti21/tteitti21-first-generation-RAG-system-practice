@@ -39,6 +39,11 @@ env/
 htmlcov/
 
 # Local development
-docs/
+# Ignore everything inside docs by default
+docs/*
+# Keep the docs folder visible to Git
+!docs/.gitkeep
+!docs/*.pdf
+
 archieve/
 util/__pycache__/
