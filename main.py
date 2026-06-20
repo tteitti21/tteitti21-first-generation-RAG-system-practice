@@ -11,7 +11,7 @@ from util.document_utils import (
 from util.env_utils import get_env_path, load_env_file
 from util.faiss_utils import load_or_create_faiss_index, normalize_query_embedding
 from util.file_utils import json_file_has_content, load_json, save_json
-from util.output_utils import print_search_results
+from util.output_utils import print_app_message, print_search_results
 from util.pdf_utils import load_pdf_pages
 
 init(autoreset=True)  # Automatically resets style after every print
@@ -148,10 +148,10 @@ def build_retrieval_query(question, chat_history):
 
 # -------------------- Main program ----------------
 def main():
-    print(f"{Fore.CYAN}" + "_" * 50)
+    print_app_message("divider")
 
     documents, chunks_recreated = load_or_create_documents()
-    print(f"Loaded {len(documents)} chunks")
+    print_app_message("chunks_loaded", len(documents))
 
     doc_embeddings, embeddings_recreated = load_or_create_embeddings(
         documents,
@@ -173,7 +173,7 @@ def main():
     # Ask for TOP_K results, unless there are fewer documents than TOP_K
     search_limit = min(TOP_K, len(documents))
 
-    print(f"{Fore.GREEN}Embeddings ready")
+    print_app_message("embeddings_ready")
 
     chat_history = []
 
@@ -266,9 +266,7 @@ def main():
         )
         chat_history = chat_history[-RECENT_CHAT_TURNS:]
 
-        print(f"{Fore.GREEN}\nAnswer:\n")
-        print(answer)
-        print(f"{Fore.CYAN}" + "_" * 50)
+        print_app_message("answer", answer)
 
 
 if __name__ == "__main__":
