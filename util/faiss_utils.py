@@ -79,3 +79,29 @@ def normalize_query_embedding(query_embedding):
     faiss.normalize_L2(query_embedding)
 
     return query_embedding
+
+
+def search_faiss_index(index, query_embedding, top_k):
+    scores, indices = index.search(query_embedding, top_k)
+
+    return scores[0], indices[0]
+
+
+def build_comparison_indexes(doc_embeddings):
+    return {
+        "flat": build_faiss_index(doc_embeddings, index_type="flat"),
+        "hnsw": build_faiss_index(doc_embeddings, index_type="hnsw")
+    }
+
+
+def compare_faiss_indexes(comparison_indexes, query_embedding, top_k):
+    comparison = {}
+
+    for index_name, index in comparison_indexes.items():
+        scores, indices = search_faiss_index(index, query_embedding, top_k)
+        comparison[index_name] = {
+            "scores": scores,
+            "indices": indices
+        }
+
+    return comparison

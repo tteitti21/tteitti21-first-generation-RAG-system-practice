@@ -9,7 +9,13 @@ from util.document_utils import (
     is_valid_document_cache
 )
 from util.env_utils import get_env_path, load_env_file
-from util.faiss_utils import load_or_create_faiss_index, normalize_query_embedding
+from util.faiss_utils import (
+    build_comparison_indexes,
+    compare_faiss_indexes,
+    load_or_create_faiss_index,
+    normalize_query_embedding,
+    search_faiss_index
+)
 from util.file_utils import json_file_has_content, load_json, save_json
 from util.output_utils import print_app_message, print_search_results
 from util.pdf_utils import load_pdf_pages
@@ -27,6 +33,10 @@ RECENT_CHAT_TURNS = 3
 
 
 ENV_VALUES = load_env_file(ENV_PATH)
+COMPARE_INDEXES = (
+    os.environ.get("COMPARE_INDEXES")
+    or ENV_VALUES.get("COMPARE_INDEXES", "false")
+).lower() == "true"
 FAISS_INDEX_TYPE = os.environ.get("FAISS_INDEX_TYPE") or ENV_VALUES.get(
     "FAISS_INDEX_TYPE",
     "flat"
@@ -172,6 +182,7 @@ def main():
     )
     # Ask for TOP_K results, unless there are fewer documents than TOP_K
     search_limit = min(TOP_K, len(documents))
+    comparison_indexes = build_comparison_indexes(doc_embeddings) if COMPARE_INDEXES else {}
 
     print_app_message("embeddings_ready")
 
@@ -192,13 +203,32 @@ def main():
 
         question_embedding = normalize_query_embedding(question_embedding)
 
-        result_scores, result_indices = faiss_index.search(
+        if COMPARE_INDEXES:
+            comparison = compare_faiss_indexes(
+                comparison_indexes,
+                question_embedding,
+                search_limit
+            )
+
+            print_search_results(
+                documents,
+                comparison["flat"]["indices"],
+                comparison["flat"]["scores"],
+                "Flat search results:"
+            )
+
+            print_search_results(
+                documents,
+                comparison["hnsw"]["indices"],
+                comparison["hnsw"]["scores"],
+                "HNSW search results:"
+            )
+
+        result_scores, result_indices = search_faiss_index(
+            faiss_index,
             question_embedding,
             search_limit
         )
-
-        result_scores = result_scores[0]
-        result_indices = result_indices[0]
 
         accepted_positions = np.where(result_scores >= MIN_SIMILARITY)[0]
 
@@ -220,9 +250,9 @@ def main():
             top_indices,
             top_scores
         )
-
-        print(f"{Fore.LIGHTMAGENTA_EX}\nRetrieved chunks:")
-        print_search_results(documents, top_indices, top_scores)
+        if not COMPARE_INDEXES:
+            print(f"{Fore.LIGHTMAGENTA_EX}\nRetrieved chunks:")
+            print_search_results(documents, top_indices, top_scores)
 
         context = "\n\n".join(
             format_document_for_context(chunk)

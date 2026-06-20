@@ -17,7 +17,10 @@ def print_app_message(message_type, value=None):
         raise ValueError(f"Unknown output message type: {message_type}")
 
 
-def print_search_results(documents, indices, scores):
+def print_search_results(documents, indices, scores, header=""):
+    if header:
+        print(f"{Fore.CYAN}\n{header}")
+
     for rank, (idx, score) in enumerate(zip(indices, scores), start=1):
         document = documents[int(idx)]
 
