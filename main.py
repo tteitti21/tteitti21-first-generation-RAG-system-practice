@@ -31,16 +31,17 @@ PDF_PATH = get_env_path(ENV_VALUES, "PDF_PATH", BASE_DIR)
 CHUNKS_PATH = get_env_path(ENV_VALUES, "CHUNKS_PATH", BASE_DIR)
 EMBEDDINGS_PATH = get_env_path(ENV_VALUES, "EMBEDDINGS_PATH", BASE_DIR)
 RELEVANT_CHUNKS_PATH = get_env_path(ENV_VALUES, "RELEVANT_CHUNKS_PATH", BASE_DIR)
+FAISS_INDEX_PATH = get_env_path(ENV_VALUES, "FAISS_INDEX_PATH", BASE_DIR)
 
 def build_faiss_index(doc_embeddings):
-    #Convert embeddings into FAISS-friendly NumPy format.
-    embeddings = np.asarray(doc_embeddings, dtype="float32")
+    # Convert embeddings into FAISS-friendly NumPy format.
+    embeddings = np.asarray(doc_embeddings, dtype="float32").copy()
     faiss.normalize_L2(embeddings)
 
     # For document embeddings, the array is usually shaped like this:
-    # (number_of_chunks, embedding_size) ->FAISS needs to know the latter.
+    # (number_of_chunks, embedding_size). FAISS needs to know the latter.
     dimension = embeddings.shape[1]
-    #Create a FAISS index with the correct embedding size.
+    # Create a FAISS index with the correct embedding size.
     index = faiss.IndexFlatIP(dimension)
     index.add(embeddings)
 
@@ -206,7 +207,7 @@ def load_or_create_embeddings(documents, force_recreate=False):
         doc_embeddings = load_json(EMBEDDINGS_PATH)
 
         if len(doc_embeddings) == len(documents):
-            return doc_embeddings
+            return doc_embeddings, False
 
         print(f"{Fore.RED}Stored embeddings do not match stored chunks. Recreating embeddings...")
 
@@ -216,12 +217,54 @@ def load_or_create_embeddings(documents, force_recreate=False):
     print(f"Storing embeddings in {EMBEDDINGS_PATH}...")
     save_json(EMBEDDINGS_PATH, doc_embeddings)
 
-    return doc_embeddings
+    return doc_embeddings, True
+
+# Loads existing faiss index, or creates new if chunks were modified or doesnt match in length.
+def load_or_create_faiss_index(doc_embeddings, documents, force_recreate=False):
+    if os.path.exists(FAISS_INDEX_PATH) and not force_recreate:
+        print(f"Found stored FAISS index in {FAISS_INDEX_PATH}...")
+
+        index_is_newer_than_embeddings = (
+            not os.path.exists(EMBEDDINGS_PATH)
+            or os.path.getmtime(FAISS_INDEX_PATH) >= os.path.getmtime(EMBEDDINGS_PATH)
+        )
+
+        try:
+            index = faiss.read_index(FAISS_INDEX_PATH)
+        except RuntimeError:
+            index = None
+            print(f"{Fore.RED}Stored FAISS index could not be read. Recreating index...")
+
+        # Number of vectors inside FAISS index match number of document chunks
+        if (
+            index
+            and index.ntotal == len(documents)
+            and index_is_newer_than_embeddings
+        ):
+            return index
+
+        print(
+            f"{Fore.RED}Stored FAISS index is stale or does not match document count. "
+            "Recreating index..."
+        )
+
+    print("Creating FAISS index...")
+    index = build_faiss_index(doc_embeddings)
+
+    print(f"Storing FAISS index in {FAISS_INDEX_PATH}...")
+    parent_dir = os.path.dirname(FAISS_INDEX_PATH)
+
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+
+    faiss.write_index(index, FAISS_INDEX_PATH)
+
+    return index
 
 # Store current chunks, add them to history and return history
 # for more performant future reference.
 def store_relevant_chunks(question, retrieval_query, documents, top_indices, top_scores):
-    relevant_chunks = [documents[i] for i in top_indices]
+    relevant_chunks = [documents[int(i)] for i in top_indices]
 
     retrieval = {
         "question": question,
@@ -231,8 +274,8 @@ def store_relevant_chunks(question, retrieval_query, documents, top_indices, top
             {
                 "chunk_index": int(idx),
                 "score": float(score),
-                "page": documents[idx]["page"],
-                "chunk": get_document_text(documents[idx])
+                "page": documents[int(idx)]["page"],
+                "chunk": get_document_text(documents[int(idx)])
             }
             for idx, score in zip(top_indices, top_scores)
         ]
@@ -276,15 +319,20 @@ def main():
     documents, chunks_recreated = load_or_create_documents()
     print(f"Loaded {len(documents)} chunks")
 
+    doc_embeddings, embeddings_recreated = load_or_create_embeddings(
+        documents,
+        force_recreate=chunks_recreated
+    )
     doc_embeddings = np.array(
-        load_or_create_embeddings(
-            documents,
-            force_recreate=chunks_recreated
-        ),
+        doc_embeddings,
         dtype="float32"
     )
 
-    faiss_index = build_faiss_index(doc_embeddings)
+    faiss_index = load_or_create_faiss_index(
+        doc_embeddings,
+        documents,
+        force_recreate=embeddings_recreated
+    )
     # Ask for TOP_K results, unless there are fewer documents than TOP_K
     search_limit = min(TOP_K, len(documents))
 
