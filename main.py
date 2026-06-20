@@ -2,13 +2,18 @@ from openai import OpenAI
 import numpy as np
 import os
 from colorama import Fore, Style, init
+from util.bm25_utils import (
+    build_bm25_index,
+    combine_faiss_and_bm25_results,
+    get_top_bm25_results
+)
 from util.chunk_utils import create_page_chunks
 from util.document_utils import (
     format_document_for_context,
     get_document_text,
     is_valid_document_cache
 )
-from util.env_utils import get_env_path, load_env_file
+from util.env_utils import get_env_bool, get_env_path, get_env_value, load_env_file
 from util.faiss_utils import (
     build_comparison_indexes,
     compare_faiss_indexes,
@@ -17,7 +22,7 @@ from util.faiss_utils import (
     search_faiss_index
 )
 from util.file_utils import json_file_has_content, load_json, save_json
-from util.output_utils import print_app_message, print_search_results
+from util.output_utils import print_app_message, print_retrieval_debug
 from util.pdf_utils import load_pdf_pages
 
 init(autoreset=True)  # Automatically resets style after every print
@@ -26,21 +31,17 @@ client = OpenAI()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(BASE_DIR, ".env")
 CHUNK_SIZE = 1000
-TOP_K = 3
+TOP_K = 5
+FETCH_K = 10
 MIN_SIMILARITY = 0.35
 MAX_HISTORY = 100
 RECENT_CHAT_TURNS = 3
 
 
 ENV_VALUES = load_env_file(ENV_PATH)
-COMPARE_INDEXES = (
-    os.environ.get("COMPARE_INDEXES")
-    or ENV_VALUES.get("COMPARE_INDEXES", "false")
-).lower() == "true"
-FAISS_INDEX_TYPE = os.environ.get("FAISS_INDEX_TYPE") or ENV_VALUES.get(
-    "FAISS_INDEX_TYPE",
-    "flat"
-)
+COMPARE_INDEXES = get_env_bool(ENV_VALUES, "COMPARE_INDEXES")
+REVIEW_ALL_SCORES = get_env_bool(ENV_VALUES, "REVIEW_ALL_SCORES")
+FAISS_INDEX_TYPE = get_env_value(ENV_VALUES, "FAISS_INDEX_TYPE", "flat")
 
 PDF_PATH = get_env_path(ENV_VALUES, "PDF_PATH", BASE_DIR)
 CHUNKS_PATH = get_env_path(ENV_VALUES, "CHUNKS_PATH", BASE_DIR)
@@ -180,9 +181,10 @@ def main():
         index_type=FAISS_INDEX_TYPE,
         force_recreate=embeddings_recreated
     )
-    # Ask for TOP_K results, unless there are fewer documents than TOP_K
-    search_limit = min(TOP_K, len(documents))
+    # Fetch more candidates than TOP_K, then keep the best accepted chunks.
+    search_limit = min(FETCH_K, len(documents))
     comparison_indexes = build_comparison_indexes(doc_embeddings) if COMPARE_INDEXES else {}
+    bm25_index = build_bm25_index(documents)
 
     print_app_message("embeddings_ready")
 
@@ -203,45 +205,40 @@ def main():
 
         question_embedding = normalize_query_embedding(question_embedding)
 
-        if COMPARE_INDEXES:
-            comparison = compare_faiss_indexes(
-                comparison_indexes,
-                question_embedding,
-                search_limit
-            )
-
-            print_search_results(
-                documents,
-                comparison["flat"]["indices"],
-                comparison["flat"]["scores"],
-                "Flat search results:"
-            )
-
-            print_search_results(
-                documents,
-                comparison["hnsw"]["indices"],
-                comparison["hnsw"]["scores"],
-                "HNSW search results:"
-            )
-
         result_scores, result_indices = search_faiss_index(
             faiss_index,
             question_embedding,
             search_limit
         )
 
-        accepted_positions = np.where(result_scores >= MIN_SIMILARITY)[0]
+        bm25_indices, bm25_scores = get_top_bm25_results(
+            question,
+            bm25_index,
+            search_limit
+        )
+
+        combined_indices, combined_scores = combine_faiss_and_bm25_results(
+            result_indices,
+            result_scores,
+            bm25_indices,
+            bm25_scores
+        )
+
+        accepted_positions = np.where(combined_scores >= MIN_SIMILARITY)[0]
 
         if len(accepted_positions) == 0:
             print(
                 f"{Fore.YELLOW}\nNo chunks were similar enough. "
                 "Could you elaborate or ask more specifically?"
             )
-            print(f"{Fore.CYAN}" + "_" * 50)
+            print_app_message("divider")
             continue
 
-        top_indices = result_indices[accepted_positions]
-        top_scores = result_scores[accepted_positions]
+        accepted_positions = accepted_positions[
+            np.argsort(combined_scores[accepted_positions])[-TOP_K:][::-1]
+        ]
+        top_indices = combined_indices[accepted_positions]
+        top_scores = combined_scores[accepted_positions]
 
         relevant_chunks = store_relevant_chunks(
             question,
@@ -250,9 +247,28 @@ def main():
             top_indices,
             top_scores
         )
-        if not COMPARE_INDEXES:
-            print(f"{Fore.LIGHTMAGENTA_EX}\nRetrieved chunks:")
-            print_search_results(documents, top_indices, top_scores)
+
+        comparison = {}
+        if COMPARE_INDEXES:
+            comparison = compare_faiss_indexes(
+                comparison_indexes,
+                question_embedding,
+                search_limit
+            )
+
+        print_retrieval_debug(
+            documents,
+            COMPARE_INDEXES,
+            REVIEW_ALL_SCORES,
+            comparison,
+            result_indices,
+            result_scores,
+            bm25_indices,
+            bm25_scores,
+            top_indices,
+            top_scores
+        )
+
 
         context = "\n\n".join(
             format_document_for_context(chunk)

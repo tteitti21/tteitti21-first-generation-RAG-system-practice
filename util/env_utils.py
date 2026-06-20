@@ -21,7 +21,7 @@ def load_env_file(file_path):
 
 
 def get_env_path(env_values, key, base_dir):
-    value = os.environ.get(key) or env_values.get(key)
+    value = get_env_value(env_values, key)
 
     if not value:
         raise ValueError(f"Missing required path in .env: {key}")
@@ -30,3 +30,13 @@ def get_env_path(env_values, key, base_dir):
         return value
 
     return os.path.join(base_dir, value)
+
+
+def get_env_value(env_values, key, default=None):
+    return os.environ.get(key) or env_values.get(key, default)
+
+
+def get_env_bool(env_values, key, default=False):
+    value = get_env_value(env_values, key, str(default))
+
+    return str(value).lower() == "true"
