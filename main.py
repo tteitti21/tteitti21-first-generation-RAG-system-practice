@@ -178,12 +178,15 @@ def main():
         if question.lower() in [ "exit","quit"]:
             break
 
-        retrieval_query = rewrite_query_for_retrieval(
-            client,
-            question,
-            chat_history,
-            RECENT_CHAT_TURNS
-        )
+        if not chat_history:
+            retrieval_query = question
+        else:
+            retrieval_query = rewrite_query_for_retrieval(
+                client,
+                question,
+                chat_history,
+                RECENT_CHAT_TURNS
+            )
 
         question_embedding = np.array(
             [get_embedding(retrieval_query)],
