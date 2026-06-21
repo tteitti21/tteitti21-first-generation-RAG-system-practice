@@ -25,6 +25,7 @@ from util.file_utils import json_file_has_content, load_json, save_json
 from util.output_utils import print_app_message, print_retrieval_debug
 from util.pdf_utils import load_pdf_pages
 from util.query_rewrite import rewrite_query_for_retrieval
+from util.rerank_utils import rerank_candidate_chunks
 
 init(autoreset=True)  # Automatically resets style after every print
 client = OpenAI()
@@ -34,7 +35,8 @@ ENV_PATH = os.path.join(BASE_DIR, ".env")
 CHUNK_SIZE = 1000
 TOP_K = 5
 FETCH_K = 10
-MIN_RETRIEVAL_SCORE = 0.35
+RERANK_K = 7
+MIN_RETRIEVAL_SCORE = 0.45
 MAX_HISTORY = 100
 RECENT_CHAT_TURNS = 3
 
@@ -42,6 +44,7 @@ RECENT_CHAT_TURNS = 3
 ENV_VALUES = load_env_file(ENV_PATH)
 COMPARE_INDEXES = get_env_bool(ENV_VALUES, "COMPARE_INDEXES")
 REVIEW_ALL_SCORES = get_env_bool(ENV_VALUES, "REVIEW_ALL_SCORES")
+ENABLE_RERANKING = get_env_bool(ENV_VALUES, "ENABLE_RERANKING", True)
 FAISS_INDEX_TYPE = get_env_value(ENV_VALUES, "FAISS_INDEX_TYPE", "flat")
 
 PDF_PATH = get_env_path(ENV_VALUES, "PDF_PATH", BASE_DIR)
@@ -225,10 +228,28 @@ def main():
             continue
 
         accepted_positions = accepted_positions[
-            np.argsort(combined_scores[accepted_positions])[-TOP_K:][::-1]
+            np.argsort(combined_scores[accepted_positions])[::-1]
         ]
-        top_indices = combined_indices[accepted_positions]
-        top_scores = combined_scores[accepted_positions]
+        candidate_indices = combined_indices[accepted_positions]
+        candidate_scores = combined_scores[accepted_positions]
+        rerank_indices = candidate_indices[:RERANK_K]
+        rerank_scores = candidate_scores[:RERANK_K]
+
+        if ENABLE_RERANKING:
+            reranked_indices, reranked_scores = rerank_candidate_chunks(
+                client,
+                question,
+                retrieval_query,
+                documents,
+                rerank_indices,
+                rerank_scores
+            )
+        else:
+            reranked_indices = rerank_indices
+            reranked_scores = rerank_scores
+
+        top_indices = np.array(reranked_indices[:TOP_K], dtype="int64")
+        top_scores = np.array(reranked_scores[:TOP_K], dtype="float32")
 
         relevant_chunks = store_relevant_chunks(
             question,

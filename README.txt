@@ -16,6 +16,12 @@ The scores from these approaches are combined before choosing the final chunks
 that are sent to the model. This helps with questions where exact terms matter,
 such as asking how many tables or figures the document contains.
 
+After FAISS and BM25 have found candidate chunks, the app can also use an LLM
+reranking step. Reranking looks at the actual candidate chunk text and moves the
+chunks that best answer the question higher before the final context is built.
+Only the strongest candidates are sent to reranking, which keeps token usage
+smaller than reranking every retrieved chunk.
+
 The program stores generated chunks, embeddings, retrieved chunks, and the
 FAISS index so the same work does not need to be repeated every time.
 
@@ -25,6 +31,7 @@ Optional debug settings can also be configured in .env:
 
 - COMPARE_INDEXES can compare flat and HNSW FAISS search results.
 - REVIEW_ALL_SCORES can print the FAISS, BM25, and final selected chunks.
+- ENABLE_RERANKING can turn the LLM reranking step on or off.
 
 This project is meant for practice and experimentation, not as a production
 application.
