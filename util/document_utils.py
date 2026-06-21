@@ -12,5 +12,17 @@ def get_document_text(document):
     return document["text"]
 
 
+def add_document_citation_metadata(document, chunk_index, score=None):
+    cited_document = dict(document)
+    cited_document["chunk_index"] = int(chunk_index)
+
+    if score is not None:
+        cited_document["score"] = float(score)
+
+    return cited_document
+
+
 def format_document_for_context(document):
-    return f"[Page {document['page']}]\n{document['text']}"
+    chunk_index = document.get("chunk_index", "unknown")
+
+    return f"[page {document['page']}, chunk {chunk_index}]\n{document['text']}"

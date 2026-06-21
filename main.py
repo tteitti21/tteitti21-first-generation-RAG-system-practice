@@ -9,6 +9,7 @@ from util.bm25_utils import (
 )
 from util.chunk_utils import create_page_chunks
 from util.document_utils import (
+    add_document_citation_metadata,
     format_document_for_context,
     get_document_text,
     is_valid_document_cache
@@ -114,7 +115,10 @@ def load_or_create_embeddings(documents, force_recreate=False):
 # Store current chunks, add them to history and return history
 # for more performant future reference.
 def store_relevant_chunks(question, retrieval_query, documents, top_indices, top_scores):
-    relevant_chunks = [documents[int(i)] for i in top_indices]
+    relevant_chunks = [
+        add_document_citation_metadata(documents[int(idx)], idx, score)
+        for idx, score in zip(top_indices, top_scores)
+    ]
 
     retrieval = {
         "question": question,
@@ -295,6 +299,10 @@ def main():
                     Answer using only the provided context.
                     You may make reasonable inferences from the context.
                     Do not introduce information that is not supported by the context.
+                    Cite every factual claim with the source label from the context.
+                    Use this citation format: [page X, chunk Y].
+                    If one sentence uses multiple chunks, cite each relevant chunk.
+                    Do not cite pages or chunks that are not included in the context.
 
                     If the answer cannot be determined from the context, say:
                     'I cannot find that information in the provided documents.'

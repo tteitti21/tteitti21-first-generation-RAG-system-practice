@@ -25,6 +25,9 @@ smaller than reranking every retrieved chunk.
 The program stores generated chunks, embeddings, retrieved chunks, and the
 FAISS index so the same work does not need to be repeated every time.
 
+Answers are generated from the selected context chunks and should cite the
+supporting page and chunk number, for example [page 4, chunk 12].
+
 The file paths are configured in the .env file.
 
 Optional debug settings can also be configured in .env:
