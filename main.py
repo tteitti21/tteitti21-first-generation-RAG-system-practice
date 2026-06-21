@@ -24,6 +24,7 @@ from util.faiss_utils import (
 from util.file_utils import json_file_has_content, load_json, save_json
 from util.output_utils import print_app_message, print_retrieval_debug
 from util.pdf_utils import load_pdf_pages
+from util.query_rewrite import rewrite_query_for_retrieval
 
 init(autoreset=True)  # Automatically resets style after every print
 client = OpenAI()
@@ -33,7 +34,7 @@ ENV_PATH = os.path.join(BASE_DIR, ".env")
 CHUNK_SIZE = 1000
 TOP_K = 5
 FETCH_K = 10
-MIN_SIMILARITY = 0.35
+MIN_RETRIEVAL_SCORE = 0.35
 MAX_HISTORY = 100
 RECENT_CHAT_TURNS = 3
 
@@ -138,25 +139,6 @@ def store_relevant_chunks(question, retrieval_query, documents, top_indices, top
     return relevant_chunks
 
 
-def build_retrieval_query(question, chat_history):
-    recent_history = chat_history[-RECENT_CHAT_TURNS:]
-
-    if not recent_history:
-        return question
-
-    history_text = "\n".join(
-        f"User: {turn['question']}\nAssistant: {turn['answer']}"
-        for turn in recent_history
-    )
-
-    return f"""
-        Recent conversation:
-        {history_text}
-
-        Current question:
-        {question}
-        """.strip()
-
 # -------------------- Main program ----------------
 def main():
     print_app_message("divider")
@@ -196,7 +178,12 @@ def main():
         if question.lower() in [ "exit","quit"]:
             break
 
-        retrieval_query = build_retrieval_query(question, chat_history)
+        retrieval_query = rewrite_query_for_retrieval(
+            client,
+            question,
+            chat_history,
+            RECENT_CHAT_TURNS
+        )
 
         question_embedding = np.array(
             [get_embedding(retrieval_query)],
@@ -224,7 +211,7 @@ def main():
             bm25_scores
         )
 
-        accepted_positions = np.where(combined_scores >= MIN_SIMILARITY)[0]
+        accepted_positions = np.where(combined_scores >= MIN_RETRIEVAL_SCORE)[0]
 
         if len(accepted_positions) == 0:
             print(
@@ -258,6 +245,7 @@ def main():
 
         print_retrieval_debug(
             documents,
+            retrieval_query,
             COMPARE_INDEXES,
             REVIEW_ALL_SCORES,
             comparison,
@@ -268,7 +256,6 @@ def main():
             top_indices,
             top_scores
         )
-
 
         context = "\n\n".join(
             format_document_for_context(chunk)

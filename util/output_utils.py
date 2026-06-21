@@ -50,6 +50,7 @@ def print_search_results(documents, indices, scores, header=""):
 
 def print_retrieval_debug(
     documents,
+    retrieval_query,
     compare_indexes,
     review_all_scores,
     comparison,
@@ -64,6 +65,8 @@ def print_retrieval_debug(
 
     Args:
         documents: Page-aware chunk objects.
+        retrieval_query: Query generated from the user question and recent chat
+            history for embedding search.
         compare_indexes: When true, print flat and HNSW FAISS comparison output.
         review_all_scores: When true, print raw FAISS and BM25 candidate lists.
         comparison: Comparison results from compare_faiss_indexes().
@@ -91,6 +94,9 @@ def print_retrieval_debug(
         )
 
     if review_all_scores:
+        print(f"{Fore.CYAN}\nRewritten retrieval query:")
+        print(retrieval_query)
+
         print(f"{Fore.LIGHTMAGENTA_EX}\nFAISS candidates:")
         print_search_results(documents, faiss_indices, faiss_scores)
 
