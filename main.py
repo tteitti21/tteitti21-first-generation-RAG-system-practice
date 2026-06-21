@@ -205,9 +205,13 @@ def main():
 
     while True:
 
-        question = input(f"{Fore.LIGHTYELLOW_EX}\nQuestion: {Style.RESET_ALL}")
+        question = input(f"{Fore.LIGHTYELLOW_EX}\nQuestion: {Style.RESET_ALL}").strip()
         if question.lower() in [ "exit","quit"]:
             break
+
+        if not question:
+            print(f"{Fore.YELLOW}Please enter a question.")
+            continue
 
         query_analysis = analyze_query_for_retrieval(
             client,

@@ -43,7 +43,10 @@ def term_matches_synonym_group(term, synonym_group):
     "sisällysluettelo".
     """
 
-    normalized = term.lower()
+    normalized = term.strip().lower()
+
+    if not normalized:
+        return False
 
     return any(
         synonym in normalized or normalized in synonym
