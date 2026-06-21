@@ -12,7 +12,7 @@ ACTION_TERM_BOOST = 0.08
 MAX_ACTION_BOOST = 0.12
 CONTEXT_TERM_BOOST = 0.05
 MAX_CONTEXT_BOOST = 0.10
-STRUCTURAL_TERM_BOOST = 0.60
+STRUCTURAL_TERM_BOOST = 0.80
 STRUCTURAL_SYNONYM_GROUPS = [
     ["sisällysluettelo", "sisältö", "sisällys"],
     ["lähdeluettelo", "lähteet"],
@@ -38,9 +38,9 @@ def add_unique_term(terms, seen_terms, term):
 def term_matches_synonym_group(term, synonym_group):
     """Return True when a term belongs to a structural synonym group.
 
-    The check allows inflected Finnish words by accepting substring matches.
-    For example, "sisällysluettelosta" still matches the base synonym
-    "sisällysluettelo".
+    The check is word-aware so that document-structure words do not match
+    unrelated verbs. For example, "kuvat" should match the structural heading
+    "Kuvat", but it should not make the verb "kuvata" structural.
     """
 
     normalized = term.strip().lower()
@@ -48,8 +48,13 @@ def term_matches_synonym_group(term, synonym_group):
     if not normalized:
         return False
 
+    words = re.findall(r"\w+", normalized)
+
     return any(
-        synonym in normalized or normalized in synonym
+        word == synonym
+        or (len(synonym) >= 6 and word.startswith(synonym))
+        or (len(word) >= 6 and synonym.startswith(word))
+        for word in words
         for synonym in synonym_group
     )
 
@@ -237,7 +242,11 @@ def structural_tokens_match(term_tokens, document_words):
 
     return all(
         any(
-            document_word.startswith(term_token)
+            document_word == term_token
+            or (
+                len(term_token) >= 6
+                and document_word.startswith(term_token)
+            )
             for document_word in document_words
         )
         for term_token in term_tokens
