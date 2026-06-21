@@ -7,15 +7,131 @@ from util.document_utils import get_document_text
 
 BOOST_TOKEN_PREFIX_LENGTH = 4
 BOOST_MIN_TOKEN_LENGTH = 3
-BOOST_COMPOUND_WORD_MIN_LENGTH = 8
 SUBJECT_TERM_BOOST = 0.30
 ACTION_TERM_BOOST = 0.08
 MAX_ACTION_BOOST = 0.12
-CONTEXT_TERM_BOOST = 0.5
+CONTEXT_TERM_BOOST = 0.05
 MAX_CONTEXT_BOOST = 0.10
+STRUCTURAL_TERM_BOOST = 0.60
+STRUCTURAL_SYNONYM_GROUPS = [
+    ["sisällysluettelo", "sisältö", "sisällys"],
+    ["lähdeluettelo", "lähteet"],
+    ["kuvaluettelo", "kuvat"],
+    ["taulukkoluettelo", "taulukot"],
+    ["liiteluettelo", "liitteet"],
+    ["sanasto", "termistö"]
+]
 
 
-def tokenize_for_boost_matching(text, include_compound_parts=False):
+def add_unique_term(terms, seen_terms, term):
+    """Append term once while preserving the original order."""
+
+    normalized = term.lower()
+
+    if normalized in seen_terms:
+        return
+
+    seen_terms.add(normalized)
+    terms.append(term)
+
+
+def term_matches_synonym_group(term, synonym_group):
+    """Return True when a term belongs to a structural synonym group.
+
+    The check allows inflected Finnish words by accepting substring matches.
+    For example, "sisällysluettelosta" still matches the base synonym
+    "sisällysluettelo".
+    """
+
+    normalized = term.lower()
+
+    return any(
+        synonym in normalized or normalized in synonym
+        for synonym in synonym_group
+    )
+
+
+def is_structural_term(term):
+    """Return True when a term belongs to the structural synonym vocabulary."""
+
+    return any(
+        term_matches_synonym_group(term, synonym_group)
+        for synonym_group in STRUCTURAL_SYNONYM_GROUPS
+    )
+
+
+def expand_terms_with_synonyms(terms):
+    """Add deterministic document-structure synonyms to analyzed terms.
+
+    LLM query analysis may know that "sisällysluettelo" means table of contents,
+    but the PDF heading may simply be "Sisältö". Expanding a small, predictable
+    synonym list makes those document-structure terms easier to retrieve without
+    relying on the model to choose the exact same word as the PDF.
+    """
+
+    expanded_terms = []
+    seen_terms = set()
+
+    for term in terms:
+        if not isinstance(term, str) or not term.strip():
+            continue
+
+        term = term.strip()
+        add_unique_term(expanded_terms, seen_terms, term)
+
+        for synonym_group in STRUCTURAL_SYNONYM_GROUPS:
+            if not term_matches_synonym_group(term, synonym_group):
+                continue
+
+            for synonym in synonym_group:
+                add_unique_term(expanded_terms, seen_terms, synonym)
+
+    return expanded_terms
+
+
+def find_structural_terms_in_text(text):
+    """Find document-structure terms directly from the user's question text."""
+
+    structural_terms = []
+    seen_terms = set()
+
+    for synonym_group in STRUCTURAL_SYNONYM_GROUPS:
+        if not term_matches_synonym_group(text, synonym_group):
+            continue
+
+        for synonym in synonym_group:
+            add_unique_term(structural_terms, seen_terms, synonym)
+
+    return structural_terms
+
+
+def expand_query_analysis_terms(query_analysis, question):
+    """Expand query analysis terms with deterministic structural synonyms.
+
+    The LLM remains responsible for understanding the question, but this helper
+    handles stable vocabulary differences like "sisällysluettelo" versus
+    "Sisältö". Structural terms found directly in the question are added to
+    subject_terms because they usually describe the concrete document part being
+    asked about.
+    """
+
+    expanded_analysis = dict(query_analysis)
+    question_structural_terms = find_structural_terms_in_text(question)
+
+    expanded_analysis["subject_terms"] = expand_terms_with_synonyms(
+        query_analysis.get("subject_terms", []) + question_structural_terms
+    )
+    expanded_analysis["action_terms"] = expand_terms_with_synonyms(
+        query_analysis.get("action_terms", [])
+    )
+    expanded_analysis["context_terms"] = expand_terms_with_synonyms(
+        query_analysis.get("context_terms", [])
+    )
+
+    return expanded_analysis
+
+
+def tokenize_for_boost_matching(text):
     """Tokenize text for subject/context term matching.
 
     This tokenizer is intentionally separate from BM25 tokenization. BM25 uses
@@ -24,13 +140,6 @@ def tokenize_for_boost_matching(text, include_compound_parts=False):
     Four-character prefixes are a small Finnish-friendly compromise:
     "autoissa" and "autossa" both become "auto", and "lampun" and "lamppu"
     both become "lamp".
-
-    When building the document-side index, include_compound_parts adds internal
-    three- and four-character pieces for longer words. That lets a query term
-    like "työssä" match a compound word like "opinnäytetyössä" through "työs",
-    and also lets "työ" match "opinnäytetyö" through "työ". This is only used
-    for document chunks, not for query terms, so phrase terms do not become
-    overly strict.
     """
 
     tokens = []
@@ -41,12 +150,23 @@ def tokenize_for_boost_matching(text, include_compound_parts=False):
 
         tokens.append(word[:BOOST_TOKEN_PREFIX_LENGTH])
 
-        if include_compound_parts and len(word) >= BOOST_COMPOUND_WORD_MIN_LENGTH:
-            for token_length in range(BOOST_MIN_TOKEN_LENGTH, BOOST_TOKEN_PREFIX_LENGTH + 1):
-                for start in range(1, len(word) - token_length + 1):
-                    tokens.append(word[start:start + token_length])
-
     return tokens
+
+
+def get_words_for_matching(text):
+    """Return full words for stricter structural-term matching.
+
+    Normal boost terms intentionally use short prefixes, but document-structure
+    terms are too easy to overmatch that way. For example, "sisällysluettelo",
+    "sisältö", and unrelated words starting with "sisä" would all share the same
+    prefix token. Full words avoid that noisy match.
+    """
+
+    return [
+        word
+        for word in re.findall(r"\w+", text.lower())
+        if len(word) >= BOOST_MIN_TOKEN_LENGTH
+    ]
 
 
 def normalize_boost_terms(terms):
@@ -70,7 +190,12 @@ def normalize_boost_terms(terms):
         if not term or term_key in seen_terms:
             continue
 
-        tokens = sorted(set(tokenize_for_boost_matching(term)))
+        if is_structural_term(term):
+            tokens = sorted(set(get_words_for_matching(term)))
+            match_type = "structural"
+        else:
+            tokens = sorted(set(tokenize_for_boost_matching(term)))
+            match_type = "prefix"
 
         if not tokens:
             continue
@@ -78,7 +203,8 @@ def normalize_boost_terms(terms):
         normalized_terms.append(
             {
                 "term": term,
-                "tokens": tokens
+                "tokens": tokens,
+                "match_type": match_type
             }
         )
         seen_terms.add(term_key)
@@ -95,22 +221,40 @@ def build_boost_index(documents):
     """
 
     return [
-        set(
-            tokenize_for_boost_matching(
-                get_document_text(document),
-                include_compound_parts=True
-            )
-        )
+        {
+            "tokens": set(tokenize_for_boost_matching(get_document_text(document))),
+            "words": set(get_words_for_matching(get_document_text(document)))
+        }
         for document in documents
     ]
 
 
-def get_matching_terms(term_specs, document_tokens):
+def structural_tokens_match(term_tokens, document_words):
+    """Match structural terms with full words instead of prefix tokens."""
+
+    return all(
+        any(
+            document_word.startswith(term_token)
+            for document_word in document_words
+        )
+        for term_token in term_tokens
+    )
+
+
+def get_matching_terms(term_specs, document_index_entry):
     """Return each original term whose normalized tokens appear in a chunk."""
 
     matches = []
+    document_tokens = document_index_entry["tokens"]
+    document_words = document_index_entry["words"]
 
     for term_spec in term_specs:
+        if term_spec["match_type"] == "structural":
+            if structural_tokens_match(term_spec["tokens"], document_words):
+                matches.append(term_spec["term"])
+
+            continue
+
         if all(token in document_tokens for token in term_spec["tokens"]):
             matches.append(term_spec["term"])
 
@@ -153,9 +297,11 @@ def apply_query_term_boosts(
     then receive one strong boost per chunk if any subject term matches.
     Action terms add medium-small capped boosts for verb relationships like
     "vertaillaan", "verrataan", and "vertailu". Context terms add smaller capped
-    boosts because they are useful, but often broader. Repeated occurrences
-    inside the same chunk do not matter, which prevents keyword repetition from
-    overpowering relevance.
+    boosts because they are useful, but often broader. Structural terms such as
+    "sisällysluettelo" receive their own stronger boost because headings like
+    "Sisältö" often have little surrounding vocabulary to help them rank.
+    Repeated occurrences inside the same chunk do not matter, which prevents
+    keyword repetition from overpowering relevance.
     """
 
     subject_specs = normalize_boost_terms(subject_terms)
@@ -176,10 +322,29 @@ def apply_query_term_boosts(
         matched_subject_terms = get_matching_terms(subject_specs, document_tokens)
         matched_action_terms = get_matching_terms(action_specs, document_tokens)
         matched_context_terms = get_matching_terms(context_specs, document_tokens)
+        matched_structural_terms = [
+            term
+            for term in (
+                matched_subject_terms
+                + matched_action_terms
+                + matched_context_terms
+            )
+            if is_structural_term(term)
+        ]
+        matched_non_structural_subject_terms = [
+            term
+            for term in matched_subject_terms
+            if not is_structural_term(term)
+        ]
 
         # Subject match is intentionally strong, but only once per chunk. The
         # reranker still decides whether the chunk deserves final answer context.
-        subject_boost = SUBJECT_TERM_BOOST if matched_subject_terms else 0.0
+        subject_boost = (
+            SUBJECT_TERM_BOOST
+            if matched_non_structural_subject_terms
+            else 0.0
+        )
+        structural_boost = STRUCTURAL_TERM_BOOST if matched_structural_terms else 0.0
         action_boost = min(
             len(matched_action_terms) * ACTION_TERM_BOOST,
             MAX_ACTION_BOOST
@@ -188,15 +353,23 @@ def apply_query_term_boosts(
             len(matched_context_terms) * CONTEXT_TERM_BOOST,
             MAX_CONTEXT_BOOST
         )
-        final_score = base_score + subject_boost + action_boost + context_boost
+        final_score = (
+            base_score
+            + subject_boost
+            + structural_boost
+            + action_boost
+            + context_boost
+        )
 
         score_details[index] = {
             "base_score": base_score,
             "score": final_score,
             "subject_boost": subject_boost,
+            "structural_boost": structural_boost,
             "action_boost": action_boost,
             "context_boost": context_boost,
             "matched_subject_terms": matched_subject_terms,
+            "matched_structural_terms": matched_structural_terms,
             "matched_action_terms": matched_action_terms,
             "matched_context_terms": matched_context_terms
         }

@@ -18,6 +18,11 @@ context terms. Subject terms receive a strong one-time score boost per chunk,
 action terms receive a medium-small boost for close verb matches, and context
 terms receive a smaller boost.
 
+Some document-structure words are expanded with simple synonyms before
+retrieval. For example, a question about "sisällysluettelo" can also match a PDF
+heading named "Sisältö". These structural terms use stricter matching and a
+stronger boost than ordinary context terms.
+
 The FAISS, BM25, and boosted scores are combined before choosing the final
 chunks that are sent to the model. This helps with questions where exact terms
 matter, such as asking how many tables or figures the document contains.

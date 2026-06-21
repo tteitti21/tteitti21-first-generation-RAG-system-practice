@@ -26,7 +26,11 @@ from util.file_utils import json_file_has_content, load_json, save_json
 from util.output_utils import print_app_message, print_retrieval_debug
 from util.pdf_utils import load_pdf_pages
 from util.query_rewrite import analyze_query_for_retrieval
-from util.retrieval_boost_utils import apply_query_term_boosts, build_boost_index
+from util.retrieval_boost_utils import (
+    apply_query_term_boosts,
+    build_boost_index,
+    expand_query_analysis_terms
+)
 from util.rerank_utils import rerank_candidate_chunks
 
 init(autoreset=True)  # Automatically resets style after every print
@@ -34,7 +38,7 @@ client = OpenAI()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(BASE_DIR, ".env")
-CHUNK_SIZE = 1000
+CHUNK_SIZE = 1600
 TOP_K = 5
 FETCH_K = 15
 RERANK_K = 7
@@ -140,9 +144,11 @@ def store_relevant_chunks(
                 "score": float(score),
                 "base_score": score_details[int(idx)]["base_score"],
                 "subject_boost": score_details[int(idx)]["subject_boost"],
+                "structural_boost": score_details[int(idx)]["structural_boost"],
                 "action_boost": score_details[int(idx)]["action_boost"],
                 "context_boost": score_details[int(idx)]["context_boost"],
                 "matched_subject_terms": score_details[int(idx)]["matched_subject_terms"],
+                "matched_structural_terms": score_details[int(idx)]["matched_structural_terms"],
                 "matched_action_terms": score_details[int(idx)]["matched_action_terms"],
                 "matched_context_terms": score_details[int(idx)]["matched_context_terms"],
                 "page": documents[int(idx)]["page"],
@@ -209,6 +215,7 @@ def main():
             chat_history,
             RECENT_CHAT_TURNS
         )
+        query_analysis = expand_query_analysis_terms(query_analysis, question)
         retrieval_query = query_analysis["retrieval_query"]
 
         question_embedding = np.array(
@@ -345,6 +352,8 @@ def main():
 
                     If the answer cannot be determined from the context, say:
                     'I cannot find that information in the provided documents.'
+                    Assume that any numbers around text is related, use them and 
+                    don't re-create numberings.
                 """
                 },
                 {
