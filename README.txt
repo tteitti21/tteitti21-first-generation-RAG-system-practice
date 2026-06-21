@@ -12,9 +12,15 @@ Retrieval uses two approaches together:
 - FAISS semantic search finds chunks that are close in meaning to the question.
 - BM25-style keyword search helps find chunks with important exact words.
 
-The scores from these approaches are combined before choosing the final chunks
-that are sent to the model. This helps with questions where exact terms matter,
-such as asking how many tables or figures the document contains.
+Before retrieval, the app asks the model to analyze the question into a
+standalone retrieval query, narrow subject terms, action terms, and broader
+context terms. Subject terms receive a strong one-time score boost per chunk,
+action terms receive a medium-small boost for close verb matches, and context
+terms receive a smaller boost.
+
+The FAISS, BM25, and boosted scores are combined before choosing the final
+chunks that are sent to the model. This helps with questions where exact terms
+matter, such as asking how many tables or figures the document contains.
 
 After FAISS and BM25 have found candidate chunks, the app can also use an LLM
 reranking step. Reranking looks at the actual candidate chunk text and moves the

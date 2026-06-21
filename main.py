@@ -25,7 +25,8 @@ from util.faiss_utils import (
 from util.file_utils import json_file_has_content, load_json, save_json
 from util.output_utils import print_app_message, print_retrieval_debug
 from util.pdf_utils import load_pdf_pages
-from util.query_rewrite import rewrite_query_for_retrieval
+from util.query_rewrite import analyze_query_for_retrieval
+from util.retrieval_boost_utils import apply_query_term_boosts, build_boost_index
 from util.rerank_utils import rerank_candidate_chunks
 
 init(autoreset=True)  # Automatically resets style after every print
@@ -35,7 +36,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(BASE_DIR, ".env")
 CHUNK_SIZE = 1000
 TOP_K = 5
-FETCH_K = 10
+FETCH_K = 15
 RERANK_K = 7
 MIN_RETRIEVAL_SCORE = 0.45
 MAX_HISTORY = 100
@@ -114,7 +115,15 @@ def load_or_create_embeddings(documents, force_recreate=False):
 
 # Store current chunks, add them to history and return history
 # for more performant future reference.
-def store_relevant_chunks(question, retrieval_query, documents, top_indices, top_scores):
+def store_relevant_chunks(
+    question,
+    retrieval_query,
+    query_analysis,
+    documents,
+    top_indices,
+    top_scores,
+    score_details
+):
     relevant_chunks = [
         add_document_citation_metadata(documents[int(idx)], idx, score)
         for idx, score in zip(top_indices, top_scores)
@@ -123,11 +132,19 @@ def store_relevant_chunks(question, retrieval_query, documents, top_indices, top
     retrieval = {
         "question": question,
         "retrieval_query": retrieval_query,
+        "query_analysis": query_analysis,
         "chunks": relevant_chunks,
         "matches": [
             {
                 "chunk_index": int(idx),
                 "score": float(score),
+                "base_score": score_details[int(idx)]["base_score"],
+                "subject_boost": score_details[int(idx)]["subject_boost"],
+                "action_boost": score_details[int(idx)]["action_boost"],
+                "context_boost": score_details[int(idx)]["context_boost"],
+                "matched_subject_terms": score_details[int(idx)]["matched_subject_terms"],
+                "matched_action_terms": score_details[int(idx)]["matched_action_terms"],
+                "matched_context_terms": score_details[int(idx)]["matched_context_terms"],
                 "page": documents[int(idx)]["page"],
                 "chunk": get_document_text(documents[int(idx)])
             }
@@ -174,6 +191,7 @@ def main():
     search_limit = min(FETCH_K, len(documents))
     comparison_indexes = build_comparison_indexes(doc_embeddings) if COMPARE_INDEXES else {}
     bm25_index = build_bm25_index(documents)
+    boost_index = build_boost_index(documents)
 
     print_app_message("embeddings_ready")
 
@@ -185,15 +203,13 @@ def main():
         if question.lower() in [ "exit","quit"]:
             break
 
-        if not chat_history:
-            retrieval_query = question
-        else:
-            retrieval_query = rewrite_query_for_retrieval(
-                client,
-                question,
-                chat_history,
-                RECENT_CHAT_TURNS
-            )
+        query_analysis = analyze_query_for_retrieval(
+            client,
+            question,
+            chat_history,
+            RECENT_CHAT_TURNS
+        )
+        retrieval_query = query_analysis["retrieval_query"]
 
         question_embedding = np.array(
             [get_embedding(retrieval_query)],
@@ -208,8 +224,17 @@ def main():
             search_limit
         )
 
+        # BM25 benefits from exact terms, so include the original question and
+        # the analyzed terms instead of using only the rewritten semantic query.
+        keyword_query = " ".join(
+            [question]
+            + query_analysis["subject_terms"]
+            + query_analysis["action_terms"]
+            + query_analysis["context_terms"]
+        )
+
         bm25_indices, bm25_scores = get_top_bm25_results(
-            question,
+            keyword_query,
             bm25_index,
             search_limit
         )
@@ -221,7 +246,16 @@ def main():
             bm25_scores
         )
 
-        accepted_positions = np.where(combined_scores >= MIN_RETRIEVAL_SCORE)[0]
+        boosted_indices, boosted_scores, score_details = apply_query_term_boosts(
+            boost_index,
+            combined_indices,
+            combined_scores,
+            query_analysis["subject_terms"],
+            query_analysis["action_terms"],
+            query_analysis["context_terms"]
+        )
+
+        accepted_positions = np.where(boosted_scores >= MIN_RETRIEVAL_SCORE)[0]
 
         if len(accepted_positions) == 0:
             print(
@@ -232,10 +266,10 @@ def main():
             continue
 
         accepted_positions = accepted_positions[
-            np.argsort(combined_scores[accepted_positions])[::-1]
+            np.argsort(boosted_scores[accepted_positions])[::-1]
         ]
-        candidate_indices = combined_indices[accepted_positions]
-        candidate_scores = combined_scores[accepted_positions]
+        candidate_indices = boosted_indices[accepted_positions]
+        candidate_scores = boosted_scores[accepted_positions]
         rerank_indices = candidate_indices[:RERANK_K]
         rerank_scores = candidate_scores[:RERANK_K]
 
@@ -258,9 +292,11 @@ def main():
         relevant_chunks = store_relevant_chunks(
             question,
             retrieval_query,
+            query_analysis,
             documents,
             top_indices,
-            top_scores
+            top_scores,
+            score_details
         )
 
         comparison = {}
@@ -274,6 +310,7 @@ def main():
         print_retrieval_debug(
             documents,
             retrieval_query,
+            query_analysis,
             COMPARE_INDEXES,
             REVIEW_ALL_SCORES,
             comparison,
@@ -282,7 +319,9 @@ def main():
             bm25_indices,
             bm25_scores,
             top_indices,
-            top_scores
+            top_scores,
+            rerank_indices,
+            rerank_scores
         )
 
         context = "\n\n".join(

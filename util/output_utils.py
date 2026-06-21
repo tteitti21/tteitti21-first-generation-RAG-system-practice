@@ -51,6 +51,7 @@ def print_search_results(documents, indices, scores, header=""):
 def print_retrieval_debug(
     documents,
     retrieval_query,
+    query_analysis,
     compare_indexes,
     review_all_scores,
     comparison,
@@ -59,7 +60,9 @@ def print_retrieval_debug(
     bm25_indices,
     bm25_scores,
     top_indices,
-    top_scores
+    top_scores,
+    boosted_indices=None,
+    boosted_scores=None
 ):
     """Print optional retrieval diagnostics and the final selected chunks.
 
@@ -67,6 +70,8 @@ def print_retrieval_debug(
         documents: Page-aware chunk objects.
         retrieval_query: Query generated from the user question and recent chat
             history for embedding search.
+        query_analysis: Structured retrieval analysis containing subject and
+            action/context terms used by keyword retrieval and score boosting.
         compare_indexes: When true, print flat and HNSW FAISS comparison output.
         review_all_scores: When true, print raw FAISS and BM25 candidate lists.
         comparison: Comparison results from compare_faiss_indexes().
@@ -76,6 +81,8 @@ def print_retrieval_debug(
         bm25_scores: Scores matching bm25_indices.
         top_indices: Final chunk indexes selected for answer context.
         top_scores: Final hybrid scores matching top_indices.
+        boosted_indices: Optional rerank candidate indexes after boosts.
+        boosted_scores: Optional scores matching boosted_indices.
     """
 
     if compare_indexes:
@@ -97,11 +104,24 @@ def print_retrieval_debug(
         print(f"{Fore.CYAN}\nRewritten retrieval query:")
         print(retrieval_query)
 
+        print(f"{Fore.CYAN}\nSubject terms:")
+        print(query_analysis.get("subject_terms", []))
+
+        print(f"{Fore.CYAN}\nAction terms:")
+        print(query_analysis.get("action_terms", []))
+
+        print(f"{Fore.CYAN}\nContext terms:")
+        print(query_analysis.get("context_terms", []))
+
         print(f"{Fore.LIGHTMAGENTA_EX}\nFAISS candidates:")
         print_search_results(documents, faiss_indices, faiss_scores)
 
         print(f"{Fore.LIGHTMAGENTA_EX}\nBM25 candidates:")
         print_search_results(documents, bm25_indices, bm25_scores)
+
+        if boosted_indices is not None and boosted_scores is not None:
+            print(f"{Fore.LIGHTMAGENTA_EX}\nRerank candidates after boosts:")
+            print_search_results(documents, boosted_indices, boosted_scores)
 
     print(f"{Fore.LIGHTMAGENTA_EX}\nTop chunks:")
     print_search_results(documents, top_indices, top_scores)
